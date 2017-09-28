@@ -1,0 +1,770 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Pythology NLP Demo\n",
+    "\n",
+    "Felix Wyss (felix.wyss@genesys.com)<br>\n",
+    "Applied Research Group<br>\n",
+    "[www.genesys.com](http://www.genesys.com)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Initialization"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "# Seed random number generators and force single-threaded TensorFlow for reproducible results\n",
+    "random_seed = 42\n",
+    "import numpy as np\n",
+    "np.random.seed(random_seed)\n",
+    "import random\n",
+    "random.seed(random_seed)\n",
+    "import tensorflow as tf\n",
+    "session_conf = tf.ConfigProto(intra_op_parallelism_threads=1, inter_op_parallelism_threads=1)\n",
+    "tf.set_random_seed(random_seed)\n",
+    "sess = tf.Session(graph=tf.get_default_graph(), config=session_conf)\n",
+    "from keras import backend as K\n",
+    "K.set_session(sess)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "import pandas as pd\n",
+    "import matplotlib.pyplot as plt\n",
+    "from keras.preprocessing.text import Tokenizer\n",
+    "from keras.preprocessing.sequence import pad_sequences\n",
+    "from keras.utils import to_categorical\n",
+    "from keras.layers import Input, Conv1D, GlobalMaxPooling1D, Dropout, Dense\n",
+    "from keras.layers.embeddings import Embedding\n",
+    "from keras.layers.merge import Concatenate\n",
+    "from keras.initializers import RandomUniform, glorot_uniform\n",
+    "from keras.models import Sequential\n",
+    "from keras.models import Model\n",
+    "from sklearn.model_selection import train_test_split\n",
+    "from sklearn.manifold import TSNE\n",
+    "%matplotlib inline"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Parse and tokenize the text data"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "files = {\"billing\": \"billing.txt\",\n",
+    "         \"cancellation\": \"cancellation.txt\",\n",
+    "         \"hardware\": \"hardware.txt\",\n",
+    "         \"security\": \"security.txt\",\n",
+    "         \"other\": \"customer_support_others.txt\"\n",
+    "        }"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "with open(files['cancellation']) as f:\n",
+    "    for _, s in zip(range(8), f):\n",
+    "        print(s.strip())"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "with open(files['security']) as f:\n",
+    "    for _, s in zip(range(8), f):\n",
+    "        print(s.strip())"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "texts = []\n",
+    "labels = []\n",
+    "topic_index = {}\n",
+    "ignoreWords = []\n",
+    "with open('stopwords.en.txt', \"r\", encoding='utf-8') as fp:\n",
+    "    for line in fp :\n",
+    "        line = line.strip()\n",
+    "        if line not in ignoreWords:\n",
+    "            ignoreWords.append(line)\n",
+    "\n",
+    "for topicnum, (topic, fname) in enumerate(sorted(files.items())):\n",
+    "    print(\"{}: {}\".format(topicnum, topic))\n",
+    "    topic_index[topicnum] = topic\n",
+    "    with open(fname) as f:\n",
+    "        for line in f:\n",
+    "            words = line.strip().lower().replace(\"_\", \" \").split()\n",
+    "            nostop = (w for w in words if w not in ignoreWords)\n",
+    "            texts.append(' '.join(nostop))\n",
+    "            labels.append(topicnum)\n",
+    "print(\"We have a total of {} sentences\".format(len(texts)))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "max_words = 10000\n",
+    "tokenizer = Tokenizer(num_words=max_words)\n",
+    "tokenizer.fit_on_texts(texts)\n",
+    "sequences = tokenizer.texts_to_sequences(texts)\n",
+    "word_index = tokenizer.word_index\n",
+    "index_to_word = {i:w for w,i in word_index.items()}\n",
+    "num_words = min(max_words, len(word_index)+1)\n",
+    "print('There are a total of {} distinct words'.format(len(word_index)))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "testseq = np.array(tokenizer.texts_to_sequences(['my mouse does not work'])).flatten()\n",
+    "testseq"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "[index_to_word[i] for i in testseq]"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Prepare input sequences and labels "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true,
+    "scrolled": false
+   },
+   "outputs": [],
+   "source": [
+    "max_sequence_length = 15\n",
+    "data = pad_sequences(sequences, maxlen=max_sequence_length)\n",
+    "data.shape"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "print(data)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "labels_cat = to_categorical(np.asarray(labels))\n",
+    "labels_cat.shape"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "print(labels_cat)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Split data into training and test set"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "X_train, X_test, y_train, y_test = train_test_split(data, labels_cat, test_size=0.15, random_state=random_seed)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "print('We have {} training samples and {} test samples'.format(X_train.shape[0], X_test.shape[0]))"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Build the model"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "embedding_dims = 10\n",
+    "\n",
+    "input = Input(shape=(X_train.shape[1],), dtype='int32')\n",
+    "\n",
+    "embedding = Embedding(input_dim=num_words, \n",
+    "                      output_dim=embedding_dims, \n",
+    "                      embeddings_initializer=RandomUniform(minval=-0.05, maxval=0.05, seed=random_seed)\n",
+    "                     )(input)\n",
+    "\n",
+    "tower1 = Conv1D(filters=32,\n",
+    "                kernel_size=2,\n",
+    "                padding='valid',\n",
+    "                activation='relu',\n",
+    "                kernel_initializer=glorot_uniform(random_seed)\n",
+    "               )(embedding)\n",
+    "tower1 = GlobalMaxPooling1D()(tower1)\n",
+    "\n",
+    "tower2 = Conv1D(filters=32,\n",
+    "                kernel_size=3,\n",
+    "                padding='valid',\n",
+    "                activation='relu',\n",
+    "                kernel_initializer=glorot_uniform(random_seed)\n",
+    "               )(embedding)\n",
+    "tower2 = GlobalMaxPooling1D()(tower2)\n",
+    "\n",
+    "tower3 = Conv1D(filters=32,\n",
+    "                kernel_size=4,\n",
+    "                padding='valid',\n",
+    "                activation='relu',\n",
+    "                kernel_initializer=glorot_uniform(random_seed)\n",
+    "               )(embedding)\n",
+    "tower3 = GlobalMaxPooling1D()(tower3)\n",
+    "\n",
+    "flattened = Concatenate()([tower1, tower2, tower3])\n",
+    "\n",
+    "dense = Dense(units=64, \n",
+    "              activation='relu', \n",
+    "              kernel_initializer=glorot_uniform(random_seed))(flattened)\n",
+    "\n",
+    "dense = Dropout(rate=0.5, seed=random_seed)(dense)\n",
+    "\n",
+    "output = Dense(units=y_train.shape[1], \n",
+    "               activation='softmax', \n",
+    "               kernel_initializer=glorot_uniform(random_seed))(dense)\n",
+    "\n",
+    "model = Model(input, output)\n",
+    "model.compile(loss='categorical_crossentropy', \n",
+    "              optimizer='rmsprop', \n",
+    "              metrics=['accuracy'])"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "model.summary()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Train the model"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "model.fit(X_train, y_train, \n",
+    "          batch_size=32,\n",
+    "          epochs=15, \n",
+    "          verbose=1, \n",
+    "          validation_data=(X_test, y_test))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "print('Training accuracy:   {:1.4f}\\nValidation Accuracy: {:1.4f}'\n",
+    "      .format(model.evaluate(X_train, y_train, verbose=0)[1], \n",
+    "              model.evaluate(X_test, y_test, verbose=0)[1]))"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Run a few tests to see whether it works"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "def predict(sentence):\n",
+    "    '''Predict best topic of a sentence, returned as tuple (topic, confidence)'''\n",
+    "    seqs = tokenizer.texts_to_sequences([sentence])\n",
+    "    seqs = pad_sequences(seqs, maxlen=max_sequence_length)\n",
+    "    pred = model.predict(seqs)[0]\n",
+    "    index = pred.argmax()\n",
+    "    return (topic_index[index], pred[index])"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "predict(\"my mouse doesn't work\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "predict('i want to cancel my service')"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "predict('please stop my subscription')"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "predict('my credit card was declined')"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "predict('i cannot log in to my computer')"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "predict('i want to speak to a human')"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Let's take a closer look at the embedding layer"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "embedweights = model.get_weights()[0];\n",
+    "embmodel = Sequential()\n",
+    "embmodel.add(Embedding(input_dim=embedweights.shape[0], output_dim=embedweights.shape[1]))\n",
+    "embmodel.compile(loss='mean_squared_error', optimizer='rmsprop')  # Parames necessary but unused as we won't train\n",
+    "embmodel.set_weights([embedweights])"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "seq = np.array(tokenizer.texts_to_sequences(['mouse', 'broken', 'credit'])).reshape(-1, 1)\n",
+    "print(seq)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "emb = embmodel.predict(seq)\n",
+    "print(np.array_str(emb.reshape(-1, 10), precision=3))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "def similarity(word1, word2):\n",
+    "    '''Compute cosine similarity between embedding vectors of two words'''\n",
+    "    seqs = tokenizer.texts_to_sequences([word1, word2])\n",
+    "    embs = embmodel.predict(seqs).reshape(2, 10)\n",
+    "    return np.dot(embs[0], embs[1])/np.linalg.norm(embs, ord=2, axis=1).prod()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "similarity('human', 'representative')"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "similarity('mouse', 'keyboard')"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "similarity('human', 'mouse')"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "similarity('password', 'login')"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "similarity('password', 'hacker')"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "similarity('hacker', 'human')"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Nice, but how about some graphs? Everyone likes pictures!"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "# Predict embeddings for all words and use t-SNE to map to two dimensions for visualization\n",
+    "embs = embmodel.predict(np.arange(1, num_words))\n",
+    "embs = embs.reshape(embs.shape[0], embs.shape[2])\n",
+    "tsne = TSNE(n_components=2, random_state=random_seed)\n",
+    "visdf = pd.DataFrame(tsne.fit_transform(embs), columns=['x', 'y'])"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "# Scatterplot with marker color based on word frequency (common: hot)\n",
+    "plt.figure(figsize=(8, 8))\n",
+    "plt.scatter(visdf['x'], visdf['y'], c=-visdf.index, cmap='coolwarm', marker='.', s=8)\n",
+    "plt.show()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "def show_words(words):\n",
+    "    '''Given a string of space-separated words, plot words with their neighbors in t-SNE mapped embedding space'''\n",
+    "    seqs = tokenizer.texts_to_sequences([words])\n",
+    "    seqs = np.array(seqs).flatten()\n",
+    "    locs = np.array([visdf.loc[i-1].values for i in seqs])\n",
+    "    minxy = locs.min(axis=0)\n",
+    "    maxxy = locs.max(axis=0)\n",
+    "    plt.figure(figsize=(8, 8))\n",
+    "    padding = 4\n",
+    "    plt.xlim([minxy[0]-padding, maxxy[0]+padding])\n",
+    "    plt.ylim([minxy[1]-padding, maxxy[1]+padding])\n",
+    "    plt.scatter(visdf['x'], visdf['y'], marker='.', s=8)\n",
+    "    for i, (x, y) in enumerate(visdf.values, 1):\n",
+    "        if i in index_to_word:\n",
+    "            color,size,alpha = ('red',12,1.0) if i in seqs else ('blue',10,0.7)\n",
+    "            plt.annotate(index_to_word[i], \n",
+    "                         xy=(x, y), \n",
+    "                         xytext=(0, 0), \n",
+    "                         color=color, \n",
+    "                         alpha=alpha, \n",
+    "                         fontsize=size,\n",
+    "                         textcoords='offset points')\n",
+    "    plt.show()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "show_words('credit card bill payment')"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "show_words('keyboard mouse monitor')"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "show_words('password locked login')"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "show_words('operator person')"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Bonus: Interactive Plot"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "# Interactive scatter plot with 500 most common words shown as text, less common only as markers\n",
+    "%matplotlib\n",
+    "plt.ion()\n",
+    "plt.figure(figsize=(10, 10))\n",
+    "plt.scatter(visdf['x'], visdf['y'], c=-visdf.index, cmap='coolwarm', marker='.', s=8)\n",
+    "for i, (x, y) in enumerate(visdf.values[:500,:], 1):\n",
+    "    if i in index_to_word:\n",
+    "        plt.annotate(index_to_word[i], xy=(x, y), xytext=(0, 0), alpha=0.7, textcoords='offset points')\n",
+    "plt.show()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": []
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.6.2"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 2
+}
